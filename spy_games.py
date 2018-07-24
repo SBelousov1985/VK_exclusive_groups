@@ -1,8 +1,6 @@
+import argparse
 import json
 from pprint import pprint
-import sys
-
-import requests
 import urllib3
 from VK import VK_User
 
@@ -26,12 +24,13 @@ def format_groups(groups_info):
 
 def save_to_file(data, file_name):
     with open(file_name, "w", encoding="utf-8") as file:
-        json.dump(data, file)
+        json.dump(data, file, ensure_ascii=False)
 
 
 def get_user_id():
-    if len(sys.argv) > 1:
-        return sys.argv[1]
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-id', help='Идентификатор пользователя vk')
+    return parser.parse_args().id
 
 
 if __name__ == '__main__':
