@@ -28,7 +28,7 @@ class VK_User:
         def wrapper(self, *args, **kwargs):
             result = f(self, *args, **kwargs)
             if 'error' in result:
-                if result['error']['error_code'] == 18:  # User was deleted or banned
+                if result['error']['error_code'] in (7, 18):  # User was deleted or banned
                     return {'items': []}
                 elif result['error']['error_code'] == 6:  # Too many requests per second
                     time.sleep(0.5)

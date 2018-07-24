@@ -1,6 +1,8 @@
 import json
 from pprint import pprint
 import sys
+
+import requests
 import urllib3
 from VK import VK_User
 
