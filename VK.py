@@ -11,11 +11,11 @@ class VK_User:
         if id_name is None:
             id_name = self._get_user_id()
         user_info = self._get_user_info(id_name)
-        if len(user_info) == 1 and type(user_info) is list:
+        if self.error_msg == '' and len(user_info) == 1 and type(user_info) is list:
             self.user_id = user_info[0]['id']
         else:
-            self.error_msg = user_info['error']['error_msg']
-            print(self.error_msg)
+            print('Не удалось получить информацию пользователя.',
+                  self.error_msg)
 
     def _get_user_id(self):
         if os.path.exists('user_id.txt'):
@@ -26,18 +26,40 @@ class VK_User:
 
     def _executor(f):
         def wrapper(self, *args, **kwargs):
-            result = f(self, *args, **kwargs)
-            if 'error' in result:
-                if result['error']['error_code'] in (7, 18):  # User was deleted or banned
-                    return {'items': []}
-                elif result['error']['error_code'] == 6:  # Too many requests per second
-                    time.sleep(0.5)
-                    return wrapper(self, *args, **kwargs)
-                else:
-                    self.error_msg = result['error']['error_msg']
-                    return result
+            self.error_msg = ''
+            try:
+                requests_info = f(self, *args, **kwargs)
+                params = requests_info['params']
+                params['access_token'] = self.token
+                params['v'] = '5.80'
+                response = requests.get(requests_info['api'],
+                                        requests_info['params'],
+                                        verify=False,
+                                        timeout=30)
+                response.raise_for_status()
+            except requests.Timeout:
+                msg = 'Превышено время ожидания от команды {}'
+                self.error_msg = msg.format(requests_info['api'])
+            except requests.HTTPError as err:
+                msg = 'Ошибка http от команды {0}, code {}'
+                self.error_msg = msg.format(requests_info['api'],
+                                            err.response.status_code)
+            except requests.RequestException:
+                msg = 'Ошибка выполнения запроса к api: {}'
+                self.error_msg = msg.format(requests_info['api'])
             else:
-                return result['response']
+                result = response.json()
+                if 'error' in result:
+                    if result['error']['error_code'] in (7, 18):  # User was deleted or banned
+                        return {'items': []}
+                    elif result['error']['error_code'] == 6:  # Too many requests per second
+                        time.sleep(0.5)
+                        return wrapper(self, *args, **kwargs)
+                    else:
+                        self.error_msg = result['error']['error_msg']
+                        return result
+                else:
+                    return result['response']
 
         return wrapper
 
@@ -45,53 +67,50 @@ class VK_User:
     def get_user_groups(self, user_id=None, detailed=False):
         if user_id is None:
             user_id = self.user_id
-        params = {'access_token': self.token,
-                  'user_id': user_id,
-                  'v': '5.80'}
+        params = {'user_id': user_id}
         if detailed:
             params['extended'] = 1
             params['fields'] = 'members_count'
-        response = requests.get('https://api.vk.com/method/groups.get',
-                                params,
-                                verify=False)
-        return response.json()
+        return {'params': params,
+                'api': 'https://api.vk.com/method/groups.get'}
 
     @_executor
     def get_friends(self):
-        params = {'access_token': self.token,
-                  'user_id': self.user_id,
-                  'fields': 'nickname',
-                  'v': '5.80'}
-        response = requests.get('https://api.vk.com/method/friends.get',
-                                params,
-                                verify=False)
-        return response.json()
+        params = {'user_id': self.user_id,
+                  'fields': 'nickname'}
+        return {'params': params,
+                'api': 'https://api.vk.com/method/friends.get'}
 
     @_executor
     def _get_user_info(self, id_name):
-        params = {'access_token': self.token,
-                  'user_ids': id_name,
-                  'fields': 'nickname',
-                  'v': '5.80'}
-        response = requests.get('https://api.vk.com/method/users.get',
-                                params,
-                                verify=False)
-        return response.json()
+        params = {'user_ids': id_name,
+                  'fields': 'nickname'}
+        return {'params': params,
+                'api': 'https://api.vk.com/method/users.get'}
 
     @_executor
     def get_friends_in_group(self, group_id):
-        params = {'access_token': self.token,
-                  'group_id': group_id,
-                  'filter': 'friends',
-                  'v': '5.80'}
-        response = requests.get('https://api.vk.com/method/groups.getMembers',
-                                params,
-                                verify=False)
-        return response.json()
+        params = {'group_id': group_id,
+                  'filter': 'friends'}
+        return {'params': params,
+                'api': 'https://api.vk.com/method/groups.getMembers'}
 
     def get_exclusive_groups(self, max_friends=0):
-        groups = self.get_user_groups(self.user_id, True)['items']
-        friends = self.get_friends()['items']
+        if self.user_id == -1:
+            print('Идентификатор пользователя не определен')
+            return
+        groups_response = self.get_user_groups(self.user_id, True)
+        if self.error_msg != '':
+            print('Ошибка получения групп текущего пользователя:',
+                  self.error_msg)
+            return groups_response
+        groups = groups_response['items']
+        friends_response = self.get_friends()
+        if self.error_msg != '':
+            print('Ошибка получения друзей текущего пользователя:',
+                  self.error_msg)
+            return friends_response
+        friends = friends_response['items']
         if max_friends == 0:
             group_ids = self._get_exclusive_groups_using_sets(groups,
                                                               friends)
@@ -121,7 +140,13 @@ class VK_User:
         friend_number = 1
         for friend in friends:
             self._progress_bar(friend_number, count_friends)
-            friend_groups = self.get_user_groups(friend['id'])['items']
+            friend_groups_response = self.get_user_groups(friend['id'])
+            if self.error_msg != '':
+                print('Ошибка получения групп пользователя с идентификатором',
+                      friend['id'])
+                print(self.error_msg)
+                continue
+            friend_groups = friend_groups_response['items']
             groups_for_current_friend_set = set(friend_groups)
             exclusive_groups -= groups_for_current_friend_set
             friend_number += 1
@@ -140,7 +165,14 @@ class VK_User:
         friend_number = 1
         for friend in friends:
             self._progress_bar(friend_number, count_friends)
-            friend_groups = self.get_user_groups(friend['id'])['items']
+            friend_groups_response = self.get_user_groups(friend['id'])
+            if self.error_msg != '':
+                print('Ошибка получения групп пользователя с идентификатором',
+                      friend['id'])
+                print(self.error_msg)
+                friend_number += 1
+                continue
+            friend_groups = friend_groups_response['items']
             self._update_group_count(friend_groups,
                                      friends_in_group_count)
             friend_number += 1
